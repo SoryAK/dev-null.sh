@@ -37,6 +37,13 @@ use Illuminate\Http\Resources\Json\JsonResource;
  */
 final class CommitResource extends JsonResource
 {
+    public bool $withGuildMentions = true;
+
+    public static function newCollection(mixed $resource): GuildMentionCollection
+    {
+        return new GuildMentionCollection($resource, self::class);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -80,7 +87,7 @@ final class CommitResource extends JsonResource
             return $commit;
         }
 
-        return [
+        $shown = [
             ...$commit,
             ...resolve(CommitBodies::class)->segments($this->body),
             'mentions' => resolve(Mentions::class)->positions($this->body, $this->organization_mentions ?? []),
@@ -98,5 +105,7 @@ final class CommitResource extends JsonResource
                 'next_cursor' => data_get($this->getAttribute('reply_preview'), 'next_cursor'),
             ]),
         ];
+
+        return $this->withGuildMentions ? ShownGuildMentions::of($shown, $request->user()) : $shown;
     }
 }

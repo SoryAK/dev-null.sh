@@ -1,4 +1,4 @@
-import { Link, router } from '@inertiajs/react';
+import { Link, router, usePage } from '@inertiajs/react';
 import { UserPlus, Volume2, VolumeX } from 'lucide-react';
 import { useState } from 'react';
 import {
@@ -31,6 +31,7 @@ export function GuildMemberCount({ guild }: { guild: Guild }) {
 }
 
 export function GuildPreferences({ guild }: { guild: Guild }) {
+    const { component } = usePage();
     const [processing, setProcessing] = useState(false);
     const { isJustToggled, markToggled, onMouseLeave } = useFollowHover();
 
@@ -40,8 +41,12 @@ export function GuildPreferences({ guild }: { guild: Guild }) {
         markToggled();
         setProcessing(true);
         router
-            .optimistic<{ guilds: Guild[] | null }>((props) => ({
-                guilds: props.guilds?.map((item) =>
+            .optimistic<{
+                guild?: Guild;
+                guilds?: Guild[];
+                guildPage?: { data: Guild[] };
+            }>((props) => {
+                const change = (item: Guild): Guild =>
                     item.id === guild.id
                         ? {
                               ...item,
@@ -52,14 +57,24 @@ export function GuildPreferences({ guild }: { guild: Guild }) {
                                   item.member_count +
                                   (kind === 'joined' ? (value ? 1 : -1) : 0),
                           }
-                        : item,
-                ),
-            }))
+                        : item;
+
+                return {
+                    ...(props.guild && { guild: change(props.guild) }),
+                    ...(props.guilds && { guilds: props.guilds.map(change) }),
+                    ...(props.guildPage && {
+                        guildPage: {
+                            ...props.guildPage,
+                            data: props.guildPage.data.map(change),
+                        },
+                    }),
+                };
+            })
             .put(
                 (kind === 'joined' ? membership : mute).url(guild.id),
                 { [kind]: value },
                 {
-                    only: ['guilds'],
+                    only: [component === 'guild/index' ? 'guilds' : 'guild'],
                     preserveScroll: true,
                     onSuccess: () => router.flushAll(),
                     onFinish: () => setProcessing(false),

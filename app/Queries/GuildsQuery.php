@@ -12,10 +12,13 @@ use Illuminate\Pagination\LengthAwarePaginator;
 
 final readonly class GuildsQuery
 {
-    /** @return Collection<int, Guild> */
-    public function get(User $user): Collection
+    /**
+     * @param  list<string>  $handles
+     * @return Collection<int, Guild>
+     */
+    public function get(User $user, array $handles): Collection
     {
-        return $this->withPreferencesOf($user)->orderByDesc('members_count')->orderBy('handle')->get();
+        return $this->withPreferencesOf($user)->whereIn('handle', $handles)->get();
     }
 
     /** @return LengthAwarePaginator<int, Guild> */
@@ -30,6 +33,29 @@ final readonly class GuildsQuery
                 ->orWhereRaw('TRANSLATE(LOWER(description COLLATE "pg_c_utf8"), \'ς\', \'σ\') LIKE TRANSLATE(LOWER(? COLLATE "pg_c_utf8"), \'ς\', \'σ\') ESCAPE \'!\'', ["%{$escaped}%"])))
             ->orderByDesc('members_count')->orderBy('handle')
             ->paginate(24, page: $page);
+    }
+
+    /**
+     * @param  list<string>  $handles
+     * @return Collection<int, Guild>
+     */
+    public function references(array $handles): Collection
+    {
+        return Guild::query()->select(['handle', 'name', 'emoji', 'icon_path', 'updated_at'])
+            ->whereIn('handle', $handles)->orderBy('handle')->get();
+    }
+
+    /** @return Collection<int, Guild> */
+    public function suggestions(string $term): Collection
+    {
+        $escaped = str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $term);
+
+        return Guild::query()->select(['handle', 'name', 'emoji', 'icon_path', 'updated_at'])->withCount('members')
+            ->where(fn (Builder $query): Builder => $query
+                ->whereRaw('TRANSLATE(LOWER(handle COLLATE "pg_c_utf8"), \'ς\', \'σ\') LIKE TRANSLATE(LOWER(? COLLATE "pg_c_utf8"), \'ς\', \'σ\') ESCAPE \'!\'', ["%{$escaped}%"])
+                ->orWhereRaw('TRANSLATE(LOWER(name COLLATE "pg_c_utf8"), \'ς\', \'σ\') LIKE TRANSLATE(LOWER(? COLLATE "pg_c_utf8"), \'ς\', \'σ\') ESCAPE \'!\'', ["%{$escaped}%"]))
+            ->orderByRaw('CASE WHEN TRANSLATE(LOWER(handle COLLATE "pg_c_utf8"), \'ς\', \'σ\') LIKE TRANSLATE(LOWER(? COLLATE "pg_c_utf8"), \'ς\', \'σ\') ESCAPE \'!\' THEN 0 ELSE 1 END', ["{$escaped}%"])
+            ->orderByDesc('members_count')->orderBy('handle')->limit(6)->get();
     }
 
     /**

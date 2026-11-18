@@ -8,21 +8,15 @@ import type { Guild } from '../../resources/js/types/guild';
 
 let state: unknown[];
 let cursor = 0;
-let effects: (() => void)[] = [];
+let effects: (() => unknown)[];
 const errors = { setError: vi.fn(), clearErrors: vi.fn() };
 vi.doMock('@inertiajs/react', async () => ({
     ...(await vi.importActual('@inertiajs/react')),
     usePage: () => ({
+        component: 'guild/index',
         props: {
-            guilds: [
-                {
-                    id: 'guild-id',
-                    handle: 'rust',
-                    name: 'Rust',
-                    is_joined: true,
-                },
-            ],
             auth: { isAdmin: false },
+            guildsEnabled: true,
         },
     }),
 }));
@@ -31,9 +25,7 @@ vi.doMock('../../resources/js/layouts/app-layout', () => ({
 }));
 vi.doMock('react', () => ({
     ...React,
-    useEffect: (effect: () => void) => {
-        effects.push(effect);
-    },
+    useEffect: (effect: () => unknown) => effects.push(effect),
     useLayoutEffect: () => {},
     useRef: () => ({ current: errors }),
     useState: (initial: unknown) => {
@@ -66,6 +58,8 @@ const { GuildPreferences } =
     await import('../../resources/js/components/guild-preferences');
 const { default: GuildIndex } =
     await import('../../resources/js/pages/guild/index');
+const { HashtagGuild } =
+    await import('../../resources/js/pages/search/index');
 type Element = ReactElement<Record<string, unknown>>;
 function elements(node: ReactNode): Element[] {
     if (!React.isValidElement(node)) return [];
@@ -99,6 +93,29 @@ beforeEach(() => {
     vi.clearAllMocks();
 });
 
+test('does not offer guild creation while an exact lookup is unknown or failed', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    const render = () => {
+        cursor = 0;
+        return HashtagGuild({ term: '#rust', initial: { handle: null, guild: null } });
+    };
+
+    try {
+        let tree = render();
+        assert.equal(tree?.props['aria-busy'], true);
+        assert.equal(elements(tree).some((element) => element.type === GuildDialog), false);
+        effects[0]();
+        await vi.advanceTimersByTimeAsync(120);
+        tree = render();
+        assert.equal(tree?.props['aria-busy'], false);
+        assert.equal(elements(tree).some((element) => element.type === GuildDialog), false);
+        assert.ok(elements(tree).some((element) => String(element.props.children).includes('Guild lookup failed.')));
+    } finally {
+        vi.useRealTimers();
+    }
+});
+
 test('promotes a separate pin without changing loaded chronological rows and restores its natural position on unpin', () => {
     const commits = Array.from(
         { length: 60 },
@@ -111,6 +128,7 @@ test('promotes a separate pin without changing loaded chronological rows and res
             GuildBoard({
                 handle: 'rust',
                 readFrom: null,
+                guild: { id: 'rust', handle: 'rust', name: 'Rust' } as Guild,
                 canModerate: true,
                 commits,
                 pinnedCommit,
@@ -148,6 +166,7 @@ test('clears the missed commits of a joined guild when its board opens', () => {
     GuildBoard({
         handle: 'rust',
         readFrom: null,
+        guild: { id: 'guild-id', handle: 'rust', name: 'Rust', is_joined: true } as Guild,
         canModerate: false,
         commits: [],
         pinnedCommit: null,
@@ -185,6 +204,7 @@ test('changes only the pin optimistically and prevents pin and load-more request
             GuildBoard({
                 handle: 'rust',
                 readFrom: null,
+                guild: { id: 'rust', handle: 'rust', name: 'Rust' } as Guild,
                 canModerate: true,
                 commits: [commit],
                 pinnedCommit: null,
@@ -292,6 +312,53 @@ test('keeps the search input mounted while accepting drafts and restored queries
     const restored = input('rust');
     assert.equal(restored.key, initial.key);
     assert.equal(restored.props.value, 'rust');
+});
+
+test('renders complete page records and applies bounded refreshes without changing their selection or order', () => {
+    const first = { id: 'first', handle: 'αλφα', name: 'First', member_count: 0 } as Guild;
+    const last = { id: 'last', handle: '日本語', name: 'Last', member_count: 0 } as Guild;
+    const guildPage = { data: [first, last], current_page: 2, last_page: 3, total: 50 };
+    const on = vi.spyOn(router, 'on').mockReturnValue(() => {});
+    const cards = (guilds?: Guild[]) => {
+        cursor = 0;
+        return elements(GuildIndex({ query: '', guildPage, guilds }))
+            .filter((element) => element.type === GuildPreferences)
+            .map((element) => element.props.guild as Guild);
+    };
+
+    assert.deepEqual(cards(), [first, last]);
+    const joined = { ...last, is_joined: true, member_count: 1 };
+    assert.deepEqual(cards([joined, first]), [first, joined]);
+    effects[0]();
+    const before = on.mock.calls[0][1];
+    const visit = { prefetch: false, only: ['guilds'], headers: {} as Record<string, string> };
+    before({ detail: { visit } } as never);
+    const headers = new Headers(visit.headers);
+    assert.deepEqual(JSON.parse(headers.get('X-Guild-Handles')!), ['αλφα', '日本語']);
+    assert.match(headers.get('X-Guild-Handles')!, /^[\x20-\x7e]+$/);
+    const navigation = { ...visit, only: ['guildPage', 'guilds'], headers: {} };
+    before({ detail: { visit: navigation } } as never);
+    assert.deepEqual(navigation.headers, {});
+    const prefetch = { ...visit, prefetch: true, headers: {} };
+    before({ detail: { visit: prefetch } } as never);
+    assert.deepEqual(prefetch.headers, {});
+});
+
+test('updates only the selected guild optimistically and refreshes records rather than directory pagination', () => {
+    const guild = { id: 'rust', handle: 'rust', name: 'Rust', is_joined: false, is_muted: true, member_count: 4 } as Guild;
+    const other = { ...guild, id: 'other', handle: 'other' };
+    const optimistic = vi.spyOn(router, 'optimistic').mockReturnValue(router);
+    const put = vi.spyOn(router, 'put').mockImplementation(() => {});
+    const button = elements(GuildPreferences({ guild })).find((element) => element.props['aria-label'] === 'Join Rust')!;
+
+    (button.props.onClick as () => void)();
+    const guildPage = { data: [other, guild], current_page: 2, total: 50 };
+    const changed = { ...guild, is_joined: true, is_muted: false, member_count: 5 };
+    assert.deepEqual(optimistic.mock.calls[0][0]({ guildPage, guilds: [guild] } as never), {
+        guildPage: { ...guildPage, data: [other, changed] }, guilds: [changed],
+    });
+    assert.deepEqual(put.mock.calls[0][2]?.only, ['guilds']);
+    assert.equal(put.mock.calls[0][2]?.preserveScroll, true);
 });
 
 test('cancels invalid guild creation before Inertia sends a request and accepts decorated matches', () => {
