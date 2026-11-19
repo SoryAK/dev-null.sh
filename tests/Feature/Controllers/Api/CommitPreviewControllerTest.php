@@ -2,10 +2,13 @@
 
 declare(strict_types=1);
 
+use App\Enums\Feature;
 use App\Jobs\UnfurlLink;
 use App\Models\Commit;
+use App\Models\Guild;
 use App\Models\User;
 use App\Rules\CommitBodyLength;
+use App\Services\Features;
 use App\Services\Urls;
 use Illuminate\Support\Facades\Queue;
 
@@ -15,6 +18,8 @@ beforeEach(function (): void {
 });
 
 it('previews a draft the way the commit it becomes is shown', function (string $body): void {
+    resolve(Features::class)->update(Feature::Guilds, true, false);
+    Guild::factory()->create(['handle' => 'rust', 'name' => 'Rust']);
     $preview = signedApiRequest($this->keyPair, 'POST', route('api-commit-preview.store'), ['body' => $body]);
 
     $commit = signedApiRequest($this->keyPair, 'POST', route('api-commit.store'), ['body' => $body])->json('data');
@@ -25,11 +30,15 @@ it('previews a draft the way the commit it becomes is shown', function (string $
             'body_segments' => $commit['body_segments'],
             'preview_segments' => $commit['preview_segments'],
             'mentions' => $commit['mentions'],
-            'guild_mentions' => [],
+            'guild_mentions' => $commit['guild_mentions'],
         ]]);
+    if (str_contains($body, '#rust')) {
+        $preview->assertJsonPath('data.guild_mentions.rust.name', 'Rust');
+    }
 })->with([
     'code, mentions and emoji' => "  shipped :rocket: with @nunomaduro\n```php\n\$name = 'devnull';\n```\nrun `composer test` :fire:  ",
     'runs of blank lines' => "Shipped it.\n\n\n\nFinally.",
+    'guild mention' => 'Learning #rust',
     'too long to show whole in a list' => implode("\n", array_fill(0, 12, 'One more line of the changelog.')),
 ]);
 

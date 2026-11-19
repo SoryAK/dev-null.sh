@@ -55,14 +55,22 @@ export function GuildPreferences({ guild }: { guild: Guild }) {
                                   value && { is_muted: false }),
                               member_count:
                                   item.member_count +
-                                  (kind === 'joined' ? (value ? 1 : -1) : 0),
+                                  (kind === 'joined'
+                                      ? Number(value) - Number(item.is_joined)
+                                      : 0),
                           }
                         : item;
 
                 return {
                     ...(props.guild && { guild: change(props.guild) }),
-                    ...(props.guilds && { guilds: props.guilds.map(change) }),
                     ...(props.guildPage && {
+                        guilds: props.guildPage.data.map((item) =>
+                            change(
+                                props.guilds?.find(
+                                    (fresh) => fresh.id === item.id,
+                                ) ?? item,
+                            ),
+                        ),
                         guildPage: {
                             ...props.guildPage,
                             data: props.guildPage.data.map(change),
